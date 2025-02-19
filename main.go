@@ -1,5 +1,5 @@
-//1go:build linux
-// 1+build linux
+//go:build linux
+// +build linux
 
 package main
 
@@ -18,6 +18,7 @@ import (
 var (
 	NIC          string
 	QueueNum     int
+	QueueID      int
 	PcapFile     string
 	Loop         bool
 	debug        bool
@@ -34,6 +35,7 @@ func main() {
 	// step 1. Parse command-line flags
 	flag.StringVar(&NIC, "nic", "eno2", "Network interface to attach to.")
 	flag.IntVar(&QueueNum, "queueNum", 1, "The amount of queue on the network interface to attach to.")
+	flag.IntVar(&QueueID, "queueId", 0, "The id of queue.")
 	flag.StringVar(&PcapFile, "pcap", "tcp_packets.pcap", "Path to the pcap file containing TCP packets.")
 	flag.BoolVar(&Loop, "loop", true, "Enable replay pcap loop.")
 	flag.BoolVar(&debug, "debug", false, "Enable debug mode.")
@@ -44,22 +46,13 @@ func main() {
 	frames := extractFrameFromPcap(transmitChan)
 	fmt.Println("Extract frames from pcap file successfully.")
 
-	// // step 3. Initialize the XDP socket
-	link, err := netlink.LinkByName(NIC)
+	// step 3. Initialize the XDP socket
+	xsks, err := initXdpSocket()
 	if err != nil {
-		panic(fmt.Sprintf("Failed to get network interface: %v", err))
-	}
-	xsks := make([]*xdp.Socket, QueueNum)
-	for i := 0; i < len(xsks); i++ {
-		if xsks[i], err = xdp.NewSocket(link.Attrs().Index, i, nil); err != nil {
-			panic(fmt.Sprintf("Failed to create AF_XDP socket: %v", err))
-		}
-		defer xsks[i].Close()
-		idx := i
-		go transmit(xsks[idx])
+		panic("Fail to initialize the XDP socket:" + err.Error())
 	}
 
-	// step 6. counter
+	// step 6. Counter
 	go count(xsks)
 
 	// step 7. Transmit packets loop.
@@ -67,6 +60,37 @@ func main() {
 		transmitChan <- frames[i]
 	}
 	fmt.Println("Finished sending packets.")
+}
+
+func initXdpSocket() ([]*xdp.Socket, error) {
+	link, err := netlink.LinkByName(NIC)
+	if err != nil {
+		return nil, err
+	}
+
+	// 创建XDP程序（使用默认ebpf程序），无自定义内核代码
+	program, err := xdp.NewProgram(QueueNum)
+	if err != nil {
+		return nil, err
+	}
+	defer program.Close()
+
+	// 附加到网络接口
+	if err = program.Attach(link.Attrs().Index); err != nil {
+		return nil, err
+	}
+	defer program.Detach(link.Attrs().Index)
+
+	xsks := make([]*xdp.Socket, QueueNum)
+	for i := 0; i < len(xsks); i++ {
+		if xsks[i], err = xdp.NewSocket(link.Attrs().Index, QueueID, nil); err != nil {
+			return nil, err
+		}
+		defer xsks[i].Close()
+		idx := i
+		go transmit(xsks[idx])
+	}
+	return xsks, nil
 }
 
 func extractFrameFromPcap(transmitChan chan []byte) [][]byte {
