@@ -26,21 +26,8 @@ var (
 )
 
 func main() {
-	defer func() {
-		if err := recover(); err != nil {
-			log.Println(err)
-		}
-	}()
-
 	// step 1. Parse command-line flags
-	flag.StringVar(&NIC, "nic", "eno2", "Network interface to attach to.")
-	flag.IntVar(&QueueNum, "queueNum", 1, "The amount of queue on the network interface to attach to.")
-	flag.IntVar(&QueueID, "queueId", 0, "The id of queue.")
-	flag.StringVar(&PcapFile, "pcap", "tcp_packets.pcap", "Path to the pcap file containing TCP packets.")
-	flag.BoolVar(&Loop, "loop", true, "Enable replay pcap loop.")
-	flag.BoolVar(&debug, "debug", false, "Enable debug mode.")
-	flag.Parse()
-	fmt.Printf("nic: %v, loop: %v, debug: %v\n", NIC, Loop, debug)
+	initFlagParam()
 
 	// step 2. Read pcap file and extract tcp frames
 	frames := extractFrameFromPcap(transmitChan)
@@ -49,17 +36,35 @@ func main() {
 	// step 3. Initialize the XDP socket
 	xsks, err := initXdpSocket()
 	if err != nil {
-		panic("Fail to initialize the XDP socket:" + err.Error())
+		fmt.Println("Fail to initialize the XDP socket:", err)
+		return
 	}
 
-	// step 6. Counter
+	defer func() {
+		if err := recover(); err != nil {
+			log.Println(err)
+		}
+	}()
+
+	// step 4. Counter
 	go count(xsks)
 
-	// step 7. Transmit packets loop.
+	// step 5. Transmit packets loop.
 	for i := 0; i < len(frames) && Loop; i = (i + 1) % len(frames) {
 		transmitChan <- frames[i]
 	}
 	fmt.Println("Finished sending packets.")
+}
+
+func initFlagParam() {
+	flag.StringVar(&NIC, "nic", "eno2", "Network interface to attach to.")
+	flag.IntVar(&QueueNum, "queueNum", 1, "The amount of queue on the network interface to attach to.")
+	flag.IntVar(&QueueID, "queueId", 0, "The id of queue.")
+	flag.StringVar(&PcapFile, "pcap", "tcp_packets.pcap", "Path to the pcap file containing TCP packets.")
+	flag.BoolVar(&Loop, "loop", true, "Enable replay pcap loop.")
+	flag.BoolVar(&debug, "debug", false, "Enable debug mode.")
+	flag.Parse()
+	fmt.Printf("nic: %v, loop: %v, debug: %v\n", NIC, Loop, debug)
 }
 
 func initXdpSocket() ([]*xdp.Socket, error) {
