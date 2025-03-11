@@ -22,6 +22,7 @@ var (
 	PcapFile     string
 	Loop         bool
 	debug        bool
+	rateLimit    int
 	transmitChan = make(chan []byte, 1000000)
 )
 
@@ -49,11 +50,34 @@ func main() {
 	// step 4. Counter
 	go count(xsks)
 
+	var totalByteCnt int64
+	var limit = rateLimit * 1024 * 1024
+
+	go func() {
+		if limit == 0 {
+			return
+		}
+		ticker := time.NewTicker(1 * time.Second)
+		for range ticker.C {
+			totalByteCnt = 0
+		}
+	}()
+
 	// step 5. Transmit packets loop.
-	for i := 0; i < len(frames) && Loop; i = (i + 1) % len(frames) {
+	for i := 0; i < len(frames); {
+		if limit > 0 && totalByteCnt >= limit {
+			continue
+		}
+
 		transmitChan <- frames[i]
+
+		if !Loop && i == len(frames)-1 {
+			break
+		}
+
+		i = (i + 1) % len(frames)
+		totalByteCnt += len(frames[i])
 	}
-	fmt.Println("Finished sending packets.")
 }
 
 func initFlagParam() {
@@ -63,6 +87,7 @@ func initFlagParam() {
 	flag.StringVar(&PcapFile, "pcap", "tcp_packets.pcap", "Path to the pcap file containing TCP packets.")
 	flag.BoolVar(&Loop, "loop", true, "Enable replay pcap loop.")
 	flag.BoolVar(&debug, "debug", false, "Enable debug mode.")
+	flag.IntVar(&rateLimit, "m", 0, "Rate limit.")
 	flag.Parse()
 	fmt.Printf("nic: %v, loop: %v, debug: %v\n", NIC, Loop, debug)
 }
